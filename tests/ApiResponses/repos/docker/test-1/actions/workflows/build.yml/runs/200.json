@@ -1,0 +1,6 @@
+{
+  "total_count": 1,
+  "workflow_runs": [
+    {"id": 120, "display_title": "Update dependencies", "path": "build.yml@refs/heads/main", "event": "push", "run_number": 12, "status": "completed", "conclusion": "success", "head_branch": "main", "head_sha": "0123456789abcdef", "created_at": "2026-01-02T10:00:00Z", "updated_at": "2026-01-02T10:05:00Z", "started_at": "2026-01-02T10:00:05Z", "completed_at": "2026-01-02T10:05:00Z"}
+  ]
+}

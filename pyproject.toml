@@ -1,0 +1,15 @@
+[project]
+name = "check-forgejo-actions"
+version = "1.0.0"
+description = "Icinga2 check for the latest Forgejo Actions workflow runs"
+requires-python = ">=3.12"
+dependencies = [
+    "requests>=2.32.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "pytest-cov>=6.2.1",
+    "ruff>=0.11.11",
+]

@@ -1,0 +1,39 @@
+name: build
+on:
+  push:
+    branches: [ "main" ]
+permissions:
+  contents: write
+jobs:
+  test:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@main
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install the project
+        run: uv sync --locked --all-extras --dev
+
+      - name: Run Lint
+        run: uv run ruff check
+
+      - name: Run unit-tests + coverage
+        run: uv run pytest --cov=check_forgejo_actions
+
+      - name: Creating coverage folder
+        run: |
+          mkdir -p coverage
+
+      - name: Coverage Badge
+        uses: tj-actions/coverage-badge-py@v1.8
+        with:
+          output: coverage/coverage.svg
+
+      - name: Publish coverage report to coverage-badge branch
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          branch: coverage-badge
+          folder: coverage

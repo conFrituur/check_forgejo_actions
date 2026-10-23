@@ -1,0 +1,4 @@
+[
+  {"id": 1, "name": "test-1", "full_name": "docker/test-1", "private": true, "archived": false, "default_branch": "main", "owner": {"id": 10, "login": "docker", "full_name": "Docker Team"}},
+  {"id": 2, "name": "other", "full_name": "example/other", "private": false, "archived": false, "default_branch": "main", "owner": {"id": 11, "login": "example", "full_name": "Example Team"}}
+]
