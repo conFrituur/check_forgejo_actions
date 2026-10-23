@@ -228,8 +228,8 @@ def test_check_actions_skips_repositories_and_workflows_without_runs(capsys) -> 
     check.get_workflows = MagicMock(return_value=[])
     with pytest.raises(SystemExit) as exit_info:
         check.check_actions()
-    assert exit_info.value.code == 0
-    assert capsys.readouterr().out == "OK - No Forgejo Actions runs found\n"
+    assert exit_info.value.code == 3
+    assert capsys.readouterr().out == "UNKNOWN - Could not find any actions to check\n"
 
 
 def test_repository_api_failure_is_unknown(capsys) -> None:

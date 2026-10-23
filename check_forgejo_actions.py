@@ -21,13 +21,13 @@ class CheckForgejoActions:
     SEVERITY = {"OK": 0, "UNKNOWN": 1, "WARNING": 2, "CRITICAL": 3}
 
     def __init__(
-        self,
-        server: str,
-        token: str,
-        owner: str = "",
-        warning_seconds: int | None = None,
-        critical_seconds: int | None = None,
-        verbose: bool = False,
+            self,
+            server: str,
+            token: str,
+            owner: str = "",
+            warning_seconds: int | None = None,
+            critical_seconds: int | None = None,
+            verbose: bool = False,
     ) -> None:
         self.server = self.normalize_server(server)
         self.token = token
@@ -55,15 +55,15 @@ class CheckForgejoActions:
 
     def validate_thresholds(self) -> None:
         for name, value in (
-            ("warning-seconds", self.warning_seconds),
-            ("critical-seconds", self.critical_seconds),
+                ("warning-seconds", self.warning_seconds),
+                ("critical-seconds", self.critical_seconds),
         ):
             if value is not None and value <= 0:
                 raise ValueError(f"{name} must be greater than zero")
         if (
-            self.warning_seconds is not None
-            and self.critical_seconds is not None
-            and self.warning_seconds >= self.critical_seconds
+                self.warning_seconds is not None
+                and self.critical_seconds is not None
+                and self.warning_seconds >= self.critical_seconds
         ):
             raise ValueError("warning-seconds must be lower than critical-seconds")
 
@@ -73,6 +73,7 @@ class CheckForgejoActions:
 
     def api_call(self, path: str, params: dict[str, int] | None = None) -> object:
         url = f"{self.server}/api/v1/{path.lstrip('/')}"
+        self.log.debug("API request: GET %s params=%s", url, params or {})
         try:
             response = requests.get(
                 url,
@@ -81,8 +82,15 @@ class CheckForgejoActions:
                 timeout=self.REQUEST_TIMEOUT,
             )
         except requests.RequestException as error:
+            self.log.debug("API request failed: path=%s error=%s", path, error)
             raise ForgejoAPIError(f"Forgejo API request failed for {path}: {error}") from error
 
+        self.log.debug(
+            "API response: path=%s status=%d bytes=%d",
+            path,
+            response.status_code,
+            len(response.content or b""),
+        )
         if response.status_code != 200:
             raise ForgejoAPIError(
                 f"Forgejo API {path} returned HTTP {response.status_code}"
@@ -106,6 +114,12 @@ class CheckForgejoActions:
             if not isinstance(data, list) or not all(isinstance(repo, dict) for repo in data):
                 raise ForgejoAPIError("Forgejo API user/repos returned an unexpected schema")
             repos.extend(data)
+            self.log.debug(
+                "Repository page %d: received=%d collected=%d",
+                page,
+                len(data),
+                len(repos),
+            )
             if len(data) < self.PAGE_SIZE:
                 return repos
             page += 1
@@ -122,9 +136,17 @@ class CheckForgejoActions:
             if not all(isinstance(workflow, dict) for workflow in entries):
                 raise ForgejoAPIError(f"Forgejo API {path} returned an unexpected schema")
             workflows.extend(entries)
+            self.log.debug(
+                "Workflow page for %s/%s: page=%d received=%d collected=%d",
+                owner,
+                repo,
+                page,
+                len(entries),
+                len(workflows),
+            )
             total = data.get("total_count")
             if len(entries) < self.PAGE_SIZE or (
-                isinstance(total, int) and len(workflows) >= total
+                    isinstance(total, int) and len(workflows) >= total
             ):
                 return workflows
             page += 1
@@ -139,10 +161,21 @@ class CheckForgejoActions:
             raise ForgejoAPIError(f"Forgejo API {path} returned an unexpected schema")
         runs = data["workflow_runs"]
         if not runs:
+            self.log.debug("No runs found for %s/%s workflow=%s", owner, repo, workflow_id)
             return None
         if not isinstance(runs[0], dict):
             raise ForgejoAPIError(f"Forgejo API {path} returned an unexpected schema")
-        return runs[0]
+        run = runs[0]
+        self.log.debug(
+            "Latest run for %s/%s workflow=%s: number=%s status=%s conclusion=%s",
+            owner,
+            repo,
+            workflow_id,
+            run.get("run_number"),
+            run.get("status"),
+            run.get("conclusion"),
+        )
+        return run
 
     @staticmethod
     def get_current_time() -> datetime:
@@ -176,6 +209,13 @@ class CheckForgejoActions:
         label = f"{slug}: {workflow_name} (run #{run_number})"
         status = run.get("status")
         conclusion = run.get("conclusion")
+        self.log.debug(
+            "Evaluating %s: status=%s conclusion=%s created_at=%s",
+            label,
+            status,
+            conclusion,
+            run.get("created_at"),
+        )
 
         if status == "completed":
             if conclusion == "failure":
@@ -204,6 +244,7 @@ class CheckForgejoActions:
         except ForgejoAPIError as error:
             self.nagios_exit("UNKNOWN", str(error))
 
+        self.log.debug("Discovered %d accessible repositories", len(repos))
         results: list[tuple[str, str]] = []
         checked_repos: set[str] = set()
         for repo in repos:
@@ -214,10 +255,13 @@ class CheckForgejoActions:
                 if not isinstance(owner, str) or not isinstance(name, str):
                     raise ForgejoAPIError("repository response is missing owner.login or name")
                 if self.owner and owner != self.owner:
+                    self.log.debug("Skipping %s/%s: owner does not match filter %s", owner, name, self.owner)
                     continue
                 slug = repo.get("full_name") or f"{owner}/{name}"
+                self.log.debug("Checking repository %s", slug)
                 workflows = self.get_workflows(owner, name)
                 active_workflows = [w for w in workflows if w.get("state") == "active"]
+                self.log.debug("Repository %s: workflows=%d active=%d", slug, len(workflows), len(active_workflows))
                 for workflow in active_workflows:
                     workflow_id = workflow.get("id")
                     if workflow_id is None:
@@ -225,24 +269,37 @@ class CheckForgejoActions:
                         continue
                     run = self.get_latest_run(owner, name, str(workflow_id))
                     if run is None:
+                        self.log.debug("Skipping workflow %s in %s: no runs", workflow.get("name") or workflow_id, slug)
                         continue
                     checked_repos.add(str(slug))
                     results.append(self.evaluate_run(str(slug), workflow, run))
             except ForgejoAPIError as error:
                 slug = repo.get("full_name", repo.get("name", "unknown repository"))
+                self.log.debug("Repository %s could not be checked: %s", slug, error)
                 results.append(("UNKNOWN", f"{slug}: {error}"))
 
         if not results:
-            self.nagios_exit("OK", "No Forgejo Actions runs found")
+            self.nagios_exit("UNKNOWN", "Could not find any actions to check")
 
         status = max(results, key=lambda result: self.SEVERITY[result[0]])[0]
         affected = [message for level, message in results if level == status]
+        counts = {
+            level: sum(result_level == level for result_level, _ in results)
+            for level in self.SEVERITY
+        }
+        self.log.debug(
+            "Aggregated results: workflows=%d repositories=%d counts=%s final=%s",
+            len(results),
+            len(checked_repos),
+            counts,
+            status,
+        )
         if status == "OK":
             workflow_count = len(results)
             self.nagios_exit(
                 "OK",
                 f"{workflow_count} latest action run(s) healthy across "
-                f"{len(checked_repos)} repository/repositories",
+                f"{len(checked_repos)} repositories",
             )
         self.nagios_exit(status, "; ".join(affected))
 
