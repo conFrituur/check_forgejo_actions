@@ -1,7 +1,8 @@
 {
-  "total_count": 2,
+  "total_count": 3,
   "workflows": [
     {"id": "build.yml", "name": "Build", "path": ".forgejo/workflows/build.yml", "state": "active", "created_at": "2025-12-01T10:00:00Z", "updated_at": "2025-12-01T10:00:00Z", "url": "https://forgejo.example.org/api/v1/repos/docker/test-1/actions/workflows/build.yml", "html_url": "https://forgejo.example.org/docker/test-1/actions"},
+    {"id": "lint.yml", "name": "Lint", "path": ".forgejo/workflows/lint.yml", "state": "active", "created_at": "2025-12-01T10:00:00Z", "updated_at": "2025-12-03T08:30:00Z", "url": "https://forgejo.example.org/api/v1/repos/docker/test-1/actions/workflows/lint.yml", "html_url": "https://forgejo.example.org/docker/test-1/actions"},
     {"id": "legacy.yml", "name": "Legacy", "path": ".forgejo/workflows/legacy.yml", "state": "disabled_manually", "created_at": "2025-12-01T10:00:00Z", "updated_at": "2025-12-02T10:00:00Z"}
   ]
 }

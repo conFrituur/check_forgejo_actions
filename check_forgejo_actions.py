@@ -85,16 +85,8 @@ class CheckForgejoActions:
             self.log.debug("API request failed: path=%s error=%s", path, error)
             raise ForgejoAPIError(f"Forgejo API request failed for {path}: {error}") from error
 
-        self.log.debug(
-            "API response: path=%s status=%d bytes=%d",
-            path,
-            response.status_code,
-            len(response.content or b""),
-        )
         if response.status_code != 200:
-            raise ForgejoAPIError(
-                f"Forgejo API {path} returned HTTP {response.status_code}"
-            )
+            raise ForgejoAPIError(f"Forgejo API {path} returned HTTP {response.status_code}")
         try:
             data = response.json()
         except ValueError as error:
@@ -288,11 +280,10 @@ class CheckForgejoActions:
             for level in self.SEVERITY
         }
         self.log.debug(
-            "Aggregated results: workflows=%d repositories=%d counts=%s final=%s",
+            "Aggregated results: workflows=%d repositories=%d counts=%s",
             len(results),
             len(checked_repos),
             counts,
-            status,
         )
         if status == "OK":
             workflow_count = len(results)

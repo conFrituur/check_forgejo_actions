@@ -84,13 +84,51 @@ def test_get_all_repos_paginates() -> None:
     )
 
 
-def test_get_workflows_and_latest_run_use_forgejo_wrappers() -> None:
+def test_get_workflows_paginates_and_combines_pages() -> None:
     check = make_check()
-    workflows = fixture("repos/docker/test-1/actions/workflows/200.json")
-    runs = fixture("repos/docker/test-1/actions/workflows/build.yml/runs/200.json")
+    workflows = fixture("repos/docker/test-1/actions/workflows/200.json")[
+        "workflows"
+    ]
+    check.PAGE_SIZE = 2
+    first_page = {"total_count": 3, "workflows": workflows[:2]}
+    second_page = {"total_count": 3, "workflows": workflows[2:]}
+    check.api_call = MagicMock(side_effect=[first_page, second_page])
+
+    assert check.get_workflows("docker", "test-1") == workflows
+    check.api_call.assert_has_calls(
+        [
+            call(
+                "repos/docker/test-1/actions/workflows",
+                {"page": 1, "limit": 2},
+            ),
+            call(
+                "repos/docker/test-1/actions/workflows",
+                {"page": 2, "limit": 2},
+            ),
+        ]
+    )
+    assert check.api_call.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("repo", "workflow_id"),
+    [
+        ("test-1", "build.yml"),
+        ("test-1", "lint.yml"),
+        ("test-2", "deploy.yml"),
+    ],
+)
+def test_get_workflows_and_latest_run_use_forgejo_wrappers(
+    repo: str, workflow_id: str
+) -> None:
+    check = make_check()
+    workflows = fixture(f"repos/docker/{repo}/actions/workflows/200.json")
+    runs = fixture(
+        f"repos/docker/{repo}/actions/workflows/{workflow_id}/runs/200.json"
+    )
     check.api_call = MagicMock(side_effect=[workflows, runs])
-    assert check.get_workflows("docker", "test-1") == workflows["workflows"]
-    assert check.get_latest_run("docker", "test-1", "build.yml") == runs["workflow_runs"][0]
+    assert check.get_workflows("docker", repo) == workflows["workflows"]
+    assert check.get_latest_run("docker", repo, workflow_id) == runs["workflow_runs"][0]
 
 
 def test_get_json_sends_forgejo_auth_and_accepts_subpath() -> None:
@@ -183,21 +221,44 @@ def test_unknown_status_and_bad_timestamp_are_unknown() -> None:
     assert check.evaluate_run("docker/test-1", workflow, run)[0] == "UNKNOWN"
 
 
-def test_check_actions_filters_owner_and_disabled_workflows() -> None:
+def test_check_actions_checks_fixture_repositories_and_skips_disabled_workflows() -> None:
     check = make_check()
     repos = fixture("user/repos/200.json")
-    workflows = fixture("repos/docker/test-1/actions/workflows/200.json")["workflows"]
-    run = fixture("runs/success.json")
+    test_1_workflows = fixture("repos/docker/test-1/actions/workflows/200.json")[
+        "workflows"
+    ]
+    test_2_workflows = fixture("repos/docker/test-2/actions/workflows/200.json")[
+        "workflows"
+    ]
+    test_1_run = fixture(
+        "repos/docker/test-1/actions/workflows/build.yml/runs/200.json"
+    )["workflow_runs"][0]
+    test_1_lint_run = fixture(
+        "repos/docker/test-1/actions/workflows/lint.yml/runs/200.json"
+    )["workflow_runs"][0]
+    test_2_run = fixture(
+        "repos/docker/test-2/actions/workflows/deploy.yml/runs/200.json"
+    )["workflow_runs"][0]
     check.get_all_repos = MagicMock(return_value=repos)
-    check.get_workflows = MagicMock(return_value=workflows)
-    check.get_latest_run = MagicMock(return_value=run)
+    check.get_workflows = MagicMock(side_effect=[test_1_workflows, test_2_workflows])
+    check.get_latest_run = MagicMock(
+        side_effect=[test_1_run, test_1_lint_run, test_2_run]
+    )
 
     with pytest.raises(SystemExit) as exit_info:
         check.check_actions()
 
-    assert exit_info.value.code == 0
-    check.get_workflows.assert_called_once_with("docker", "test-1")
-    check.get_latest_run.assert_called_once_with("docker", "test-1", "build.yml")
+    assert exit_info.value.code == 2
+    check.get_workflows.assert_has_calls(
+        [call("docker", "test-1"), call("docker", "test-2")]
+    )
+    check.get_latest_run.assert_has_calls(
+        [
+            call("docker", "test-1", "build.yml"),
+            call("docker", "test-1", "lint.yml"),
+            call("docker", "test-2", "deploy.yml"),
+        ]
+    )
 
 
 def test_check_actions_aggregates_with_critical_precedence(capsys) -> None:
