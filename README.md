@@ -1,6 +1,6 @@
 # Check Forgejo Actions
 
-Icinga/Nagios plugin that checks the newest Forgejo Actions run for every active workflow in repositories visible to an API token. It requires Python 3.12 or newer and uses the Forgejo v1 API.
+Icinga/Nagios plugin that checks the newest Forgejo Actions run for every workflow with recorded tasks in repositories visible to an API token. It requires Python 3.12 or newer and uses the Forgejo v1 API.
 
 ## Installation and usage
 
@@ -22,9 +22,9 @@ uv run check_forgejo_actions.py \
   --critical-seconds 7200
 ```
 
-`--server` accepts a hostname, a full HTTP(S) URL, or a Forgejo URL beneath a subpath. `--owner` optionally limits repository discovery to one user or organization. The warning and critical thresholds are independent and optional; they apply only to queued, waiting, pending, requested, or in-progress runs. When both are supplied, warning must be lower than critical.
+`--server` accepts a hostname, a full HTTP(S) URL, or a Forgejo URL beneath a subpath. `--owner` optionally limits repository discovery to one user or organization. The warning and critical thresholds are independent and optional; they apply only to queued, waiting, pending, requested, or in-progress, running, or blocked tasks. When both are supplied, warning must be lower than critical.
 
-A failed completed run is always CRITICAL. Successful, cancelled, and skipped runs are healthy. Unknown statuses or API errors produce UNKNOWN. Repositories without active workflows and workflows without runs are ignored.
+A failed completed run is always CRITICAL. Successful, cancelled, and skipped runs are healthy. Unknown statuses or API errors produce UNKNOWN. The check reads `/repos/{owner}/{repo}/actions/tasks`, selects the highest `run_number` per `workflow_id`, and evaluates all job tasks in that run. Workflows without tasks are ignored. The tasks endpoint does not expose workflow activation state, so disabled workflows with recorded tasks are included.
 
 The token needs read access to all monitored repositories and their Actions data. Store it as a protected Icinga custom variable; never place it directly in the command definition.
 

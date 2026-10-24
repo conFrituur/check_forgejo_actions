@@ -1,0 +1,29 @@
+{
+  "total_count": 3,
+  "workflow_runs": [
+    {
+      "id": 103,
+      "workflow_id": "build.yml",
+      "run_number": 12,
+      "name": "Build",
+      "status": "success",
+      "created_at": "2026-01-02T10:00:00Z"
+    },
+    {
+      "id": 102,
+      "workflow_id": "build.yml",
+      "run_number": 12,
+      "name": "Lint",
+      "status": "failure",
+      "created_at": "2026-01-02T10:00:00Z"
+    },
+    {
+      "id": 101,
+      "workflow_id": "build.yml",
+      "run_number": 11,
+      "name": "Build",
+      "status": "failure",
+      "created_at": "2026-01-01T10:00:00Z"
+    }
+  ]
+}
