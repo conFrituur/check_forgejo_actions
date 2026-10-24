@@ -9,19 +9,18 @@ from requests.models import Response
 
 from check_forgejo_actions import CheckForgejoActions, ForgejoAPIError, main
 
-
 SERVER = "forgejo.example.org"
 TOKEN = "SUPERSECRET"
 NOW = datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)
 FIXTURES = Path(__file__).parent / "ApiResponses"
 
 
-def fixture(path: str) -> object:
+def fixture(path: str) -> list | dict:
     return json.loads((FIXTURES / path).read_text())
 
 
 def make_check(**kwargs) -> CheckForgejoActions:
-    defaults = {"server": SERVER, "token": TOKEN, "owner": "docker"}
+    defaults = {"server": SERVER, "token": TOKEN, "owner": "docker", "verbose": True}
     defaults.update(kwargs)
     check = CheckForgejoActions(**defaults)
     check.get_current_time = MagicMock(return_value=NOW)
@@ -43,9 +42,10 @@ def test_main_constructs_and_runs_checker() -> None:
         "7200",
         "--verbose",
     ]
-    with patch("sys.argv", args), patch(
-        "check_forgejo_actions.CheckForgejoActions"
-    ) as checker:
+    with (
+        patch("sys.argv", args),
+        patch("check_forgejo_actions.CheckForgejoActions") as checker,
+    ):
         main()
     checker.assert_called_once_with(SERVER, TOKEN, "docker", 3600, 7200, True)
     checker.return_value.check_actions.assert_called_once_with()
@@ -67,7 +67,9 @@ def test_server_normalization(server: str, expected: str) -> None:
 )
 def test_invalid_thresholds(warning: int | None, critical: int | None) -> None:
     with pytest.raises(ValueError):
-        CheckForgejoActions(SERVER, TOKEN, warning_seconds=warning, critical_seconds=critical)
+        CheckForgejoActions(
+            SERVER, TOKEN, warning_seconds=warning, critical_seconds=critical
+        )
 
 
 def test_get_all_repos_paginates() -> None:
@@ -86,9 +88,7 @@ def test_get_all_repos_paginates() -> None:
 
 def test_get_workflows_paginates_and_combines_pages() -> None:
     check = make_check()
-    workflows = fixture("repos/docker/test-1/actions/workflows/200.json")[
-        "workflows"
-    ]
+    workflows = fixture("repos/docker/test-1/actions/workflows/200.json")["workflows"]
     check.PAGE_SIZE = 2
     first_page = {"total_count": 3, "workflows": workflows[:2]}
     second_page = {"total_count": 3, "workflows": workflows[2:]}
@@ -97,14 +97,8 @@ def test_get_workflows_paginates_and_combines_pages() -> None:
     assert check.get_workflows("docker", "test-1") == workflows
     check.api_call.assert_has_calls(
         [
-            call(
-                "repos/docker/test-1/actions/workflows",
-                {"page": 1, "limit": 2},
-            ),
-            call(
-                "repos/docker/test-1/actions/workflows",
-                {"page": 2, "limit": 2},
-            ),
+            call("repos/docker/test-1/actions/workflows", {"page": 1, "limit": 2}),
+            call("repos/docker/test-1/actions/workflows", {"page": 2, "limit": 2}),
         ]
     )
     assert check.api_call.call_count == 2
@@ -112,20 +106,14 @@ def test_get_workflows_paginates_and_combines_pages() -> None:
 
 @pytest.mark.parametrize(
     ("repo", "workflow_id"),
-    [
-        ("test-1", "build.yml"),
-        ("test-1", "lint.yml"),
-        ("test-2", "deploy.yml"),
-    ],
+    [("test-1", "build.yml"), ("test-1", "lint.yml"), ("test-2", "deploy.yml")],
 )
 def test_get_workflows_and_latest_run_use_forgejo_wrappers(
     repo: str, workflow_id: str
 ) -> None:
     check = make_check()
     workflows = fixture(f"repos/docker/{repo}/actions/workflows/200.json")
-    runs = fixture(
-        f"repos/docker/{repo}/actions/workflows/{workflow_id}/runs/200.json"
-    )
+    runs = fixture(f"repos/docker/{repo}/actions/workflows/{workflow_id}/runs/200.json")
     check.api_call = MagicMock(side_effect=[workflows, runs])
     assert check.get_workflows("docker", repo) == workflows["workflows"]
     assert check.get_latest_run("docker", repo, workflow_id) == runs["workflow_runs"][0]
@@ -136,7 +124,9 @@ def test_get_json_sends_forgejo_auth_and_accepts_subpath() -> None:
     response.status_code = 200
     response._content = b'{"workflows": [], "total_count": 0}'
     with patch("requests.get", return_value=response) as get:
-        data = CheckForgejoActions(f"https://{SERVER}/git", TOKEN).api_call("repos/a/b/actions/workflows")
+        data = CheckForgejoActions(f"https://{SERVER}/git", TOKEN).api_call(
+            "repos/a/b/actions/workflows"
+        )
     assert data == {"workflows": [], "total_count": 0}
     get.assert_called_once_with(
         f"https://{SERVER}/git/api/v1/repos/a/b/actions/workflows",
@@ -155,8 +145,9 @@ def test_get_json_rejects_http_errors(status_code: int) -> None:
 
 
 def test_get_json_rejects_network_and_malformed_responses() -> None:
-    with patch("requests.get", side_effect=requests.ConnectionError("offline")), pytest.raises(
-        ForgejoAPIError
+    with (
+        patch("requests.get", side_effect=requests.ConnectionError("offline")),
+        pytest.raises(ForgejoAPIError),
     ):
         make_check().api_call("user/repos")
 
@@ -179,7 +170,7 @@ def test_get_json_rejects_network_and_malformed_responses() -> None:
 def test_completed_run_statuses(fixture_name: str, expected_status: str) -> None:
     check = make_check()
     workflow = {"id": "build.yml", "name": "Build", "state": "active"}
-    run = fixture(f"runs/{fixture_name}")
+    run = fixture(f"runs/{fixture_name}")  # type:
     status, message = check.evaluate_run("docker/test-1", workflow, run)
     assert status == expected_status
     assert "docker/test-1: Build (run #12)" in message
@@ -221,7 +212,9 @@ def test_unknown_status_and_bad_timestamp_are_unknown() -> None:
     assert check.evaluate_run("docker/test-1", workflow, run)[0] == "UNKNOWN"
 
 
-def test_check_actions_checks_fixture_repositories_and_skips_disabled_workflows() -> None:
+def test_check_actions_checks_fixture_repositories_and_skips_disabled_workflows() -> (
+    None
+):
     check = make_check()
     repos = fixture("user/repos/200.json")
     test_1_workflows = fixture("repos/docker/test-1/actions/workflows/200.json")[
