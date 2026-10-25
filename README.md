@@ -23,9 +23,9 @@ options:
   -h, --help            show this help message and exit
   --owner, -o OWNER     only check repositories owned by this user or organization
   --warning-seconds, -w WARNING_SECONDS
-                        warn when an active run is older than this
+                        warn when an pending/active run is older than this (stuck)
   --critical-seconds, -c CRITICAL_SECONDS
-                        fail when an active run is older than this
+                        fail when an pending/active run is older than this (stuck)
   --verbose, -v
 
 required arguments:
@@ -35,7 +35,9 @@ required arguments:
                         Forgejo API token
 ```
 
-`--server` accepts a hostname or a full HTTP(S) URL. `--owner` optionally limits repository discovery to one user or organization. The warning and critical thresholds are independent and optional; they apply only to running tasks. When both are supplied, warning must be lower than critical.
+`--server` accepts a hostname or a full HTTP(S) URL. `--owner` optionally limits repository discovery to one user or organization. 
+
+The warning and critical thresholds are independent and optional; they apply only to pending/running tasks, to get notified when a run is stuck or not being picked up by a runner.
 
 A failed run is always CRITICAL. Successful, cancelled, and skipped runs are healthy. Unknown statuses or API errors produce UNKNOWN. The check reads `/repos/{owner}/{repo}/actions/tasks`, workflows without tasks are ignored. The tasks endpoint does not expose workflow activation state, so disabled workflows with recorded tasks are included.
 

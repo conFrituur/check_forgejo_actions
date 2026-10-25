@@ -289,13 +289,13 @@ def main() -> None:
         "--warning-seconds",
         "-w",
         type=int,
-        help="warn when an active run is older than this",
+        help="warn when an pending/active run is older than this (stuck)",
     )
     parser.add_argument(
         "--critical-seconds",
         "-c",
         type=int,
-        help="fail when an active run is older than this",
+        help="fail when an pending/active run is older than this (stuck)",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
