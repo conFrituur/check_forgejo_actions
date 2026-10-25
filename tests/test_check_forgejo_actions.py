@@ -11,11 +11,11 @@ from check_forgejo_actions import CheckForgejoActions, ForgejoAPIError, main
 
 SERVER = "forgejo.example.org"
 TOKEN = "SUPERSECRET"
-NOW = datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 25, 15, 15, tzinfo=timezone.utc)
 FIXTURES = Path(__file__).parent / "ApiResponses"
 
 
-def fixture(path: str) -> list | dict:
+def fixture(path: str) -> dict:
     return json.loads((FIXTURES / path).read_text())
 
 
@@ -86,43 +86,61 @@ def test_get_all_repos_paginates() -> None:
     )
 
 
-def task(workflow_id: str = "build.yml", run_number: int = 12,
-         status: str = "success", name: str = "Build") -> dict:
-    return {"workflow_id": workflow_id, "run_number": run_number,
-            "status": status, "name": name, "created_at": "2026-01-02T10:00:00Z"}
-
-
-def test_get_latest_tasks_requests_only_latest_run() -> None:
+@pytest.mark.parametrize("slug", [None, "", 123])
+def test_check_actions_rejects_missing_or_invalid_slug(slug, capsys) -> None:
     check = make_check()
-    build = task()
-    check.api_call = MagicMock(return_value={"workflow_runs": [build], "total_count": 4})
+    check.get_all_repos = MagicMock(return_value=[{"full_name": slug}])
+    check.get_latest_task = MagicMock()
+    with pytest.raises(SystemExit) as exit_info:
+        check.check_actions()
+    assert exit_info.value.code == 3
+    assert "repository response is missing full_name" in capsys.readouterr().out
+    check.get_latest_task.assert_not_called()
 
-    assert check.get_latest_tasks("docker/test-1") == build
-    check.api_call.assert_called_once_with(
-        "repos/docker/test-1/actions/tasks", {"page": 1, "limit": 1}
-    )
+
+def task(
+    workflow_id: str = "build.yml",
+    run_number: int = 12,
+    status: str = "success",
+    name: str = "Build",
+) -> dict:
+    return {
+        "workflow_id": workflow_id,
+        "run_number": run_number,
+        "status": status,
+        "name": name,
+        "created_at": "2026-01-02T10:00:00Z",
+    }
 
 
 def test_get_latest_tasks_empty_response() -> None:
     check = make_check()
-    check.api_call = MagicMock(return_value={"workflow_runs": [], "total_count": 0})
-    assert check.get_latest_tasks("docker/test-1") is None
+    check.api_call = MagicMock(
+        return_value=fixture("repos/docker/test-2/actions/tasks/200.json")
+    )
+    assert check.get_latest_task("docker/test-2") is None
 
 
-@pytest.mark.parametrize("data", [
-    [], {}, {"workflow_runs": None}, {"workflow_runs": [None]},
-])
+@pytest.mark.parametrize(
+    "data",
+    [
+        [],
+        {},
+        {"workflow_runs": None},
+        {"workflow_runs": [None]},
+    ],
+)
 def test_get_latest_tasks_rejects_malformed_responses(data) -> None:
     check = make_check()
     check.api_call = MagicMock(return_value=data)
     with pytest.raises(ForgejoAPIError):
-        check.get_latest_tasks("docker/test-1")
+        check.get_latest_task("docker/test-1")
 
 
 def test_get_latest_tasks_quotes_path_components() -> None:
     check = make_check()
     check.api_call = MagicMock(return_value={"workflow_runs": []})
-    assert check.get_latest_tasks("a b/c d") is None
+    assert check.get_latest_task("a b/c d") is None
     check.api_call.assert_called_once_with(
         "repos/a%20b/c%20d/actions/tasks", {"page": 1, "limit": 1}
     )
@@ -168,21 +186,39 @@ def test_get_json_rejects_network_and_malformed_responses() -> None:
 
 
 @pytest.mark.parametrize(
-    ("fixture_name", "expected_status"),
+    ("run_status", "expected_status"),
     [
-        ("success.json", "OK"),
-        ("cancelled.json", "OK"),
-        ("skipped.json", "OK"),
-        ("failure.json", "CRITICAL"),
+        ("success", "OK"),
+        ("cancelled", "OK"),
+        ("skipped", "OK"),
+        ("failure", "CRITICAL"),
+        ("failed", "UNKNOWN"),
     ],
 )
-def test_completed_run_statuses(fixture_name: str, expected_status: str) -> None:
+def test_evaluate_completed_run_statuses(run_status: str, expected_status: str) -> None:
     check = make_check()
-    run = fixture(f"runs/{fixture_name}")
-    run["name"] = "Build"
+    run = fixture("repos/docker/test-1/actions/tasks/200.json")["workflow_runs"][0]
+    run["status"] = run_status
     status, message = check.evaluate_run("docker/test-1", run)
     assert status == expected_status
-    assert "docker/test-1: Build" in message
+    assert "docker/test-1: build-push-image" in message
+
+
+def test_evaluate_run_matches_real_tasks_response() -> None:
+    check = make_check()
+    check.api_call = MagicMock(
+        return_value=fixture("repos/docker/test-1/actions/tasks/200.json")
+    )
+    run = check.get_latest_task("docker/test-1")
+    assert check.evaluate_run("docker/test-1", run) == (
+        "OK",
+        "docker/test-1: build-push-image success",
+    )
+
+
+@pytest.mark.parametrize("run", [{}, {"status": "completed"}])
+def test_run_without_recognized_status_is_unknown(run: dict) -> None:
+    assert make_check().evaluate_run("docker/test-1", run)[0] == "UNKNOWN"
 
 
 @pytest.mark.parametrize(
@@ -193,25 +229,27 @@ def test_completed_run_statuses(fixture_name: str, expected_status: str) -> None
         ("pending", 4, "CRITICAL"),
         ("requested", 2, "WARNING"),
         ("in_progress", 4, "CRITICAL"),
+        ("success", 1, "OK"),
+        ("success", 999, "OK"),
     ],
 )
 def test_active_run_thresholds(status: str, age_hours: int, expected: str) -> None:
     check = make_check(warning_seconds=3600, critical_seconds=10800)
-    run = fixture("runs/active.json")
+    run = fixture("repos/docker/test-1/actions/tasks/200.json")["workflow_runs"][0]
     run["status"] = status
-    run["created_at"] = f"2026-01-02T{12 - age_hours:02d}:00:00Z"
+    run["created_at"] = f"2026-10-25T{15 - age_hours:02d}:15:00Z"
     assert check.evaluate_run("docker/test-1", run)[0] == expected
 
 
 def test_active_run_without_thresholds_is_ok() -> None:
     check = make_check()
-    run = fixture("runs/active.json")
+    run = fixture("repos/docker/test-1/actions/tasks/200.json")["workflow_runs"][0]
     assert check.evaluate_run("docker/test-1", run)[0] == "OK"
 
 
 def test_unknown_status_and_bad_timestamp_are_unknown() -> None:
     check = make_check(warning_seconds=60)
-    run = fixture("runs/active.json")
+    run = fixture("repos/docker/test-1/actions/tasks/200.json")["workflow_runs"][0]
     run["status"] = "surprising"
     assert check.evaluate_run("docker/test-1", run)[0] == "UNKNOWN"
     run["status"] = "queued"
@@ -220,35 +258,186 @@ def test_unknown_status_and_bad_timestamp_are_unknown() -> None:
 
 
 def test_check_actions_reports_healthy_workflow_and_repository_counts(capsys) -> None:
-    check = make_check()
-    check.get_all_repos = MagicMock(return_value=[
-        {"full_name": "docker/one"},
-        {"full_name": "docker/two"},
-    ])
-    check.get_latest_tasks = MagicMock(side_effect=[
-        task(),
-        task(name="Deploy"),
-    ])
-    with pytest.raises(SystemExit) as exit_info:
-        check.check_actions()
-    assert exit_info.value.code == 0
-    assert capsys.readouterr().out == (
-        "OK - 2 latest action run(s) healthy across 2 repositories\n"
+    check = make_check(warning_seconds=3600)
+    check.api_call = MagicMock(
+        side_effect=[
+            fixture("user/repos/200.json"),
+            fixture("repos/docker/test-1/actions/tasks/200.json"),
+            fixture("repos/docker/test-1/actions/tasks/200.json"),
+        ]
     )
 
+    with pytest.raises(SystemExit) as exit_info:
+        check.check_actions()
+    assert capsys.readouterr().out == (
+        "OK - 2 action run(s) healthy across 2 repositories\n"
+    )
+    assert exit_info.value.code == 0
 
-@pytest.mark.parametrize(("status", "code"), [
-    ("success", 0), ("failure", 2), ("running", 1), ("unknown", 3),
-])
+
+def test_check_actions_ignores_workflows_and_repositories_without_tasks(capsys) -> None:
+    check = make_check(warning_seconds=3600)
+    check.api_call = MagicMock(
+        side_effect=[
+            fixture("user/repos/200.json"),
+            fixture("repos/docker/test-1/actions/tasks/200.json"),
+            fixture("repos/docker/test-2/actions/tasks/200.json"),
+        ]
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        check.check_actions()
+    assert capsys.readouterr().out == (
+        "OK - 1 action run(s) healthy across 2 repositories\n"
+    )
+    assert exit_info.value.code == 0
+
+
+def test_check_actions_task_with_failure(capsys) -> None:
+    check = make_check(warning_seconds=3600)
+    check.api_call = MagicMock(
+        side_effect=[
+            fixture("user/repos/201.json"),
+            fixture("repos/docker/test-1/actions/tasks/200.json"),
+            fixture("repos/docker/test-2/actions/tasks/200.json"),
+            fixture("repos/docker/test-3/actions/tasks/200.json"),
+        ]
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        check.check_actions()
+    assert capsys.readouterr().out == (
+        "CRITICAL - docker/test-3: build-push-image failed\n"
+    )
+    assert exit_info.value.code == 2
+
+def test_check_actions_task_with_multiple_failures(capsys) -> None:
+    check = make_check(warning_seconds=3600)
+    check.api_call = MagicMock(
+        side_effect=[
+            fixture("user/repos/201.json"),
+            fixture("repos/docker/test-1/actions/tasks/200.json"),
+            fixture("repos/docker/test-3/actions/tasks/200.json"),
+            fixture("repos/docker/test-3/actions/tasks/200.json"),
+        ]
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        check.check_actions()
+    assert capsys.readouterr().out == (
+        "CRITICAL - docker/test-2: build-push-image failed; docker/test-3: build-push-image failed\n"
+    )
+    assert exit_info.value.code == 2
+
+
+def test_check_actions_task_with_running_task(capsys) -> None:
+    check = make_check(warning_seconds=3600)
+    check.api_call = MagicMock(
+        side_effect=[
+            fixture("user/repos/202.json"),
+            fixture("repos/docker/test-1/actions/tasks/200.json"),
+            fixture("repos/docker/test-2/actions/tasks/200.json"),
+            fixture("repos/docker/test-4/actions/tasks/200.json"),
+        ]
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        check.check_actions()
+    assert capsys.readouterr().out == (
+        "OK - 2 action run(s) healthy across 3 repositories\n"
+    )
+    assert exit_info.value.code == 0
+
+
+def test_check_actions_task_with_running_task_overdue(capsys) -> None:
+    check = make_check(warning_seconds=3600)
+    running = fixture("repos/docker/test-4/actions/tasks/200.json")
+    running["workflow_runs"][0]["created_at"] = "2026-10-23T10:00:00Z"
+    check.api_call = MagicMock(
+        side_effect=[
+            fixture("user/repos/202.json"),
+            fixture("repos/docker/test-1/actions/tasks/200.json"),
+            fixture("repos/docker/test-2/actions/tasks/200.json"),
+            running,
+        ]
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        check.check_actions()
+    assert capsys.readouterr().out == (
+        "WARNING - docker/test-4: build-push-image running for 2 days\n"
+    )
+    assert exit_info.value.code == 1
+
+def test_check_actions_task_with_running_task_overdue_critical(capsys) -> None:
+    check = make_check(warning_seconds=3600, critical_seconds=7200)
+    running = fixture("repos/docker/test-4/actions/tasks/200.json")
+    running["workflow_runs"][0]["created_at"] = "2026-10-23T10:00:00Z"
+    check.api_call = MagicMock(
+        side_effect=[
+            fixture("user/repos/202.json"),
+            fixture("repos/docker/test-1/actions/tasks/200.json"),
+            fixture("repos/docker/test-2/actions/tasks/200.json"),
+            running,
+        ]
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        check.check_actions()
+    assert capsys.readouterr().out == (
+        "CRITICAL - docker/test-4: build-push-image running for 2 days\n"
+    )
+    assert exit_info.value.code == 2
+
+def test_check_actions_task_with_running_task_overdue_and_a_failure(capsys) -> None:
+    check = make_check(warning_seconds=3600)
+    running = fixture("repos/docker/test-4/actions/tasks/200.json")
+    running["workflow_runs"][0]["created_at"] = "2026-10-23T10:00:00Z"
+    check.api_call = MagicMock(
+        side_effect=[
+            fixture("user/repos/202.json"),
+            fixture("repos/docker/test-1/actions/tasks/200.json"),
+            fixture("repos/docker/test-3/actions/tasks/200.json"),
+            running,
+        ]
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        check.check_actions()
+    assert capsys.readouterr().out == (
+        "CRITICAL - docker/test-2: build-push-image failed\n"
+    )
+    assert exit_info.value.code == 2
+
+
+def test_check_actions_without_tasks_is_unknown(capsys) -> None:
+    check = make_check()
+    check.get_all_repos = MagicMock(
+        return_value=[
+            {"full_name": "docker/empty"},
+        ]
+    )
+    check.get_latest_task = MagicMock(return_value=None)
+    with pytest.raises(SystemExit) as exit_info:
+        check.check_actions()
+    assert capsys.readouterr().out == "UNKNOWN - Could not find any actions to check\n"
+    assert exit_info.value.code == 3
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        ("success", 0),
+        ("failure", 2),
+        ("running", 1),
+        ("unknown", 3),
+    ],
+)
 def test_check_actions_reads_tasks_endpoint(status: str, code: int, capsys) -> None:
     check = make_check(warning_seconds=3600)
     response = Response()
     response.status_code = 200
-    response._content = json.dumps({"workflow_runs": [task(status=status)],
-                                    "total_count": 1}).encode()
-    check.get_all_repos = MagicMock(return_value=[
-        {"full_name": "docker/test-1"},
-    ])
+    response._content = json.dumps(
+        {"workflow_runs": [task(status=status)], "total_count": 1}
+    ).encode()
+    check.get_all_repos = MagicMock(
+        return_value=[
+            {"full_name": "docker/test-1"},
+        ]
+    )
     with patch("requests.get", return_value=response) as get:
         with pytest.raises(SystemExit) as exit_info:
             check.check_actions()
@@ -259,58 +448,10 @@ def test_check_actions_reads_tasks_endpoint(status: str, code: int, capsys) -> N
     assert capsys.readouterr().out
 
 
-def test_check_actions_reports_latest_task_failure(capsys) -> None:
-    check = make_check()
-    check.get_all_repos = MagicMock(return_value=[
-        {"full_name": "docker/test-1"},
-    ])
-    check.api_call = MagicMock(
-        return_value={"workflow_runs": [task(name="Lint", status="failure")],
-                      "total_count": 4}
-    )
-    with pytest.raises(SystemExit) as exit_info:
-        check.check_actions()
-    assert exit_info.value.code == 2
-    output = capsys.readouterr().out
-    assert "docker/test-1: Lint failed" in output
-    assert "run #11" not in output
-
-
-def test_check_actions_ignores_workflows_and_repositories_without_tasks(capsys) -> None:
-    check = make_check()
-    check.get_all_repos = MagicMock(return_value=[
-        {"full_name": "docker/empty"},
-        {"full_name": "docker/test-1"},
-    ])
-    check.api_call = MagicMock(side_effect=[
-        {"workflow_runs": [], "total_count": 0},
-        {"workflow_runs": [task()],
-         "total_count": 2},
-    ])
-    with pytest.raises(SystemExit) as exit_info:
-        check.check_actions()
-    assert exit_info.value.code == 0
-    assert capsys.readouterr().out == (
-        "OK - 1 latest action run(s) healthy across 1 repositories\n"
-    )
-
-
-def test_check_actions_without_tasks_is_unknown(capsys) -> None:
-    check = make_check()
-    check.get_all_repos = MagicMock(return_value=[
-        {"full_name": "docker/empty"},
-    ])
-    check.get_latest_tasks = MagicMock(return_value=None)
-    with pytest.raises(SystemExit) as exit_info:
-        check.check_actions()
-    assert exit_info.value.code == 3
-    assert capsys.readouterr().out == "UNKNOWN - Could not find any actions to check\n"
-
-
 def test_repository_api_failure_is_unknown(capsys) -> None:
     check = make_check()
     check.get_all_repos = MagicMock(return_value=[fixture("user/repos/200.json")[0]])
-    check.get_latest_tasks = MagicMock(side_effect=ForgejoAPIError("offline"))
+    check.get_latest_task = MagicMock(side_effect=ForgejoAPIError("offline"))
     with pytest.raises(SystemExit) as exit_info:
         check.check_actions()
     assert exit_info.value.code == 3
@@ -325,14 +466,3 @@ def test_nagios_exit(status: str, code: int, capsys) -> None:
         CheckForgejoActions.nagios_exit(status, "Test")
     assert exit_info.value.code == code
     assert capsys.readouterr().out == f"{status} - Test\n"
-
-@pytest.mark.parametrize("slug", [None, "", 123])
-def test_check_actions_rejects_missing_or_invalid_slug(slug, capsys) -> None:
-    check = make_check()
-    check.get_all_repos = MagicMock(return_value=[{"full_name": slug}])
-    check.get_latest_tasks = MagicMock()
-    with pytest.raises(SystemExit) as exit_info:
-        check.check_actions()
-    assert exit_info.value.code == 3
-    assert "repository response is missing full_name" in capsys.readouterr().out
-    check.get_latest_tasks.assert_not_called()

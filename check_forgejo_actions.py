@@ -25,7 +25,7 @@ class CheckForgejoActions:
         "running",
         "blocked",
     }
-    OK_CONCLUSIONS = {"success", "cancelled", "skipped"}
+    OK_STATUSES = {"success", "cancelled", "skipped"}
     SEVERITY = {"OK": 0, "UNKNOWN": 1, "WARNING": 2, "CRITICAL": 3}
 
     def __init__(
@@ -90,7 +90,7 @@ class CheckForgejoActions:
                 if not isinstance(slug, str) or not slug:
                     raise ForgejoAPIError("repository response is missing full_name")
                 self.log.debug("Checking repository %s", slug)
-                latest = self.get_latest_tasks(slug)
+                latest = self.get_latest_task(slug)
                 checked_repos += 1
                 if latest is not None:
                     results.append(self.evaluate_run(slug, latest))
@@ -116,7 +116,7 @@ class CheckForgejoActions:
         if status == "OK":
             self.nagios_exit(
                 "OK",
-                f"{len(results)} latest action run(s) healthy across "
+                f"{len(results)} action run(s) healthy across "
                 f"{checked_repos} repositories",
             )
         self.nagios_exit(status, "; ".join(affected))
@@ -143,7 +143,7 @@ class CheckForgejoActions:
                 return repos
             page += 1
 
-    def get_latest_tasks(self, slug: str) -> dict | None:
+    def get_latest_task(self, slug: str) -> dict | None:
         """Fetch the latest action task for a repository."""
         path = f"repos/{quote(slug, safe='/')}/actions/tasks"
         data = self.api_call(path, {"page": 1, "limit": 1})
@@ -161,7 +161,6 @@ class CheckForgejoActions:
         task = tasks[0]
         if not isinstance(task, dict):
             raise ForgejoAPIError(f"Forgejo API {path} returned an unexpected schema")
-        self.log.debug("Latest task for %s", slug)
         return task
 
     @property
@@ -216,37 +215,29 @@ class CheckForgejoActions:
     @staticmethod
     def duration(seconds: int) -> str:
         if seconds < 60:
-            return f"{seconds}s"
+            return f"{seconds} secs"
         if seconds < 3600:
-            return f"{seconds // 60}m"
+            return f"{seconds // 60} mins"
         if seconds < 86400:
-            return f"{seconds // 3600}h"
-        return f"{seconds // 86400}d"
+            return f"{seconds // 3600} hours"
+        return f"{seconds // 86400} days"
 
     def evaluate_run(self, slug: str, run: dict) -> tuple[str, str]:
+        """Evaluate a Forgejo task's status, which also contains its final outcome."""
         run_name = run.get("name") or run.get("id") or "unknown run"
         label = f"{slug}: {run_name}"
         status = run.get("status")
-        conclusion = run.get("conclusion")
         self.log.debug(
-            "Evaluating %s: status=%s conclusion=%s created_at=%s",
+            "Evaluating %s: status=%s created_at=%s",
             label,
             status,
-            conclusion,
             run.get("created_at"),
         )
 
-        if status in self.OK_CONCLUSIONS:
+        if status in self.OK_STATUSES:
             return "OK", f"{label} {status}"
         if status == "failure":
             return "CRITICAL", f"{label} failed"
-
-        if status == "completed":
-            if conclusion == "failure":
-                return "CRITICAL", f"{label} failed"
-            if conclusion in self.OK_CONCLUSIONS:
-                return "OK", f"{label} {conclusion}"
-            return "UNKNOWN", f"{label} has unknown conclusion {conclusion!r}"
 
         if status in self.ACTIVE_STATUSES:
             try:

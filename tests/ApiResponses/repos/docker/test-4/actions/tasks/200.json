@@ -1,0 +1,20 @@
+{
+  "workflow_runs": [
+    {
+      "id": 98,
+      "name": "build-push-image",
+      "head_branch": "main",
+      "head_sha": "2878cff4ee293f223cc2993438d7afdfa1dab22a",
+      "run_number": 8,
+      "event": "workflow_dispatch",
+      "display_title": "Build and Push Docker Image",
+      "status": "running",
+      "workflow_id": "build_and_push.yml",
+      "url": "https://git.example.com/docker/test-4/actions/runs/8",
+      "created_at": "2026-10-25T16:12:54+01:00",
+      "updated_at": "2026-10-25T16:13:21+01:00",
+      "run_started_at": "2026-10-25T16:12:54+01:00"
+    }
+  ],
+  "total_count": 10
+}
