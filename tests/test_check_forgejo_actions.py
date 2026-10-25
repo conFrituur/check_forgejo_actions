@@ -92,50 +92,39 @@ def task(workflow_id: str = "build.yml", run_number: int = 12,
             "status": status, "name": name, "created_at": "2026-01-02T10:00:00Z"}
 
 
-def test_get_latest_tasks_paginates_and_keeps_all_jobs_in_latest_run() -> None:
+def test_get_latest_tasks_requests_only_latest_run() -> None:
     check = make_check()
-    check.PAGE_SIZE = 200
     build = task()
-    lint = task(name="Lint", status="failure")
-    deploy = task("deploy.yml")
-    check.api_call = MagicMock(side_effect=[
-        {"workflow_runs": [task(run_number=11, status="failure"), build], "total_count": 4},
-        {"workflow_runs": [lint, deploy], "total_count": 4},
-    ])
+    check.api_call = MagicMock(return_value={"workflow_runs": [build], "total_count": 4})
 
-    assert check.get_latest_tasks("docker", "test-1") == {
-        "build.yml": [build, lint], "deploy.yml": [deploy],
-    }
-    assert check.api_call.call_args_list == [
-        call("repos/docker/test-1/actions/tasks", {"page": 1, "limit": 200}),
-        call("repos/docker/test-1/actions/tasks", {"page": 2, "limit": 200}),
-    ]
+    assert check.get_latest_tasks("docker/test-1") == build
+    check.api_call.assert_called_once_with(
+        "repos/docker/test-1/actions/tasks", {"page": 1, "limit": 1}
+    )
 
 
 def test_get_latest_tasks_empty_response() -> None:
     check = make_check()
     check.api_call = MagicMock(return_value={"workflow_runs": [], "total_count": 0})
-    assert check.get_latest_tasks("docker", "test-1") == {}
+    assert check.get_latest_tasks("docker/test-1") is None
 
 
 @pytest.mark.parametrize("data", [
     [], {}, {"workflow_runs": None}, {"workflow_runs": [None]},
-    {"workflow_runs": [{}]}, {"workflow_runs": [task(run_number=0)]},
-    {"workflow_runs": [task(workflow_id="")]},
 ])
 def test_get_latest_tasks_rejects_malformed_responses(data) -> None:
     check = make_check()
     check.api_call = MagicMock(return_value=data)
     with pytest.raises(ForgejoAPIError):
-        check.get_latest_tasks("docker", "test-1")
+        check.get_latest_tasks("docker/test-1")
 
 
 def test_get_latest_tasks_quotes_path_components() -> None:
     check = make_check()
     check.api_call = MagicMock(return_value={"workflow_runs": []})
-    assert check.get_latest_tasks("a/b", "c d") == {}
+    assert check.get_latest_tasks("a b/c d") is None
     check.api_call.assert_called_once_with(
-        "repos/a%2Fb/c%20d/actions/tasks", {"page": 1, "limit": 200}
+        "repos/a%20b/c%20d/actions/tasks", {"page": 1, "limit": 1}
     )
 
 
@@ -189,11 +178,11 @@ def test_get_json_rejects_network_and_malformed_responses() -> None:
 )
 def test_completed_run_statuses(fixture_name: str, expected_status: str) -> None:
     check = make_check()
-    workflow = {"id": "build.yml", "name": "Build", "state": "active"}
-    run = fixture(f"runs/{fixture_name}")  # type:
-    status, message = check.evaluate_run("docker/test-1", workflow, run)
+    run = fixture(f"runs/{fixture_name}")
+    run["name"] = "Build"
+    status, message = check.evaluate_run("docker/test-1", run)
     assert status == expected_status
-    assert "docker/test-1: Build (run #12)" in message
+    assert "docker/test-1: Build" in message
 
 
 @pytest.mark.parametrize(
@@ -208,45 +197,43 @@ def test_completed_run_statuses(fixture_name: str, expected_status: str) -> None
 )
 def test_active_run_thresholds(status: str, age_hours: int, expected: str) -> None:
     check = make_check(warning_seconds=3600, critical_seconds=10800)
-    workflow = {"id": "build.yml", "name": "Build", "state": "active"}
     run = fixture("runs/active.json")
     run["status"] = status
     run["created_at"] = f"2026-01-02T{12 - age_hours:02d}:00:00Z"
-    assert check.evaluate_run("docker/test-1", workflow, run)[0] == expected
+    assert check.evaluate_run("docker/test-1", run)[0] == expected
 
 
 def test_active_run_without_thresholds_is_ok() -> None:
     check = make_check()
     run = fixture("runs/active.json")
-    assert check.evaluate_run("docker/test-1", {"name": "Build"}, run)[0] == "OK"
+    assert check.evaluate_run("docker/test-1", run)[0] == "OK"
 
 
 def test_unknown_status_and_bad_timestamp_are_unknown() -> None:
     check = make_check(warning_seconds=60)
-    workflow = {"name": "Build"}
     run = fixture("runs/active.json")
     run["status"] = "surprising"
-    assert check.evaluate_run("docker/test-1", workflow, run)[0] == "UNKNOWN"
+    assert check.evaluate_run("docker/test-1", run)[0] == "UNKNOWN"
     run["status"] = "queued"
     run["created_at"] = "yesterday"
-    assert check.evaluate_run("docker/test-1", workflow, run)[0] == "UNKNOWN"
+    assert check.evaluate_run("docker/test-1", run)[0] == "UNKNOWN"
 
 
 def test_check_actions_reports_healthy_workflow_and_repository_counts(capsys) -> None:
     check = make_check()
     check.get_all_repos = MagicMock(return_value=[
-        {"name": "one", "owner": {"login": "docker"}},
-        {"name": "two", "owner": {"login": "docker"}},
+        {"full_name": "docker/one"},
+        {"full_name": "docker/two"},
     ])
     check.get_latest_tasks = MagicMock(side_effect=[
-        {"build.yml": [task(), task(name="Lint")], "lint.yml": [task("lint.yml")]},
-        {"deploy.yml": [task("deploy.yml")]},
+        task(),
+        task(name="Deploy"),
     ])
     with pytest.raises(SystemExit) as exit_info:
         check.check_actions()
     assert exit_info.value.code == 0
     assert capsys.readouterr().out == (
-        "OK - 3 latest action run(s) healthy across 2 repositories\n"
+        "OK - 2 latest action run(s) healthy across 2 repositories\n"
     )
 
 
@@ -260,7 +247,7 @@ def test_check_actions_reads_tasks_endpoint(status: str, code: int, capsys) -> N
     response._content = json.dumps({"workflow_runs": [task(status=status)],
                                     "total_count": 1}).encode()
     check.get_all_repos = MagicMock(return_value=[
-        {"name": "test-1", "owner": {"login": "docker"}},
+        {"full_name": "docker/test-1"},
     ])
     with patch("requests.get", return_value=response) as get:
         with pytest.raises(SystemExit) as exit_info:
@@ -272,31 +259,32 @@ def test_check_actions_reads_tasks_endpoint(status: str, code: int, capsys) -> N
     assert capsys.readouterr().out
 
 
-def test_check_actions_ignores_older_failures_but_checks_all_latest_jobs(capsys) -> None:
+def test_check_actions_reports_latest_task_failure(capsys) -> None:
     check = make_check()
     check.get_all_repos = MagicMock(return_value=[
-        {"name": "test-1", "owner": {"login": "docker"}},
+        {"full_name": "docker/test-1"},
     ])
     check.api_call = MagicMock(
-        return_value=fixture("repos/docker/test-1/actions/tasks/200.json")
+        return_value={"workflow_runs": [task(name="Lint", status="failure")],
+                      "total_count": 4}
     )
     with pytest.raises(SystemExit) as exit_info:
         check.check_actions()
     assert exit_info.value.code == 2
     output = capsys.readouterr().out
-    assert "build.yml: Lint (run #12) failed" in output
+    assert "docker/test-1: Lint failed" in output
     assert "run #11" not in output
 
 
 def test_check_actions_ignores_workflows_and_repositories_without_tasks(capsys) -> None:
     check = make_check()
     check.get_all_repos = MagicMock(return_value=[
-        {"name": "empty", "owner": {"login": "docker"}},
-        {"name": "test-1", "owner": {"login": "docker"}},
+        {"full_name": "docker/empty"},
+        {"full_name": "docker/test-1"},
     ])
     check.api_call = MagicMock(side_effect=[
         {"workflow_runs": [], "total_count": 0},
-        {"workflow_runs": [task(), task(run_number=11, status="failure")],
+        {"workflow_runs": [task()],
          "total_count": 2},
     ])
     with pytest.raises(SystemExit) as exit_info:
@@ -310,9 +298,9 @@ def test_check_actions_ignores_workflows_and_repositories_without_tasks(capsys) 
 def test_check_actions_without_tasks_is_unknown(capsys) -> None:
     check = make_check()
     check.get_all_repos = MagicMock(return_value=[
-        {"name": "empty", "owner": {"login": "docker"}},
+        {"full_name": "docker/empty"},
     ])
-    check.get_latest_tasks = MagicMock(return_value={})
+    check.get_latest_tasks = MagicMock(return_value=None)
     with pytest.raises(SystemExit) as exit_info:
         check.check_actions()
     assert exit_info.value.code == 3
@@ -337,3 +325,14 @@ def test_nagios_exit(status: str, code: int, capsys) -> None:
         CheckForgejoActions.nagios_exit(status, "Test")
     assert exit_info.value.code == code
     assert capsys.readouterr().out == f"{status} - Test\n"
+
+@pytest.mark.parametrize("slug", [None, "", 123])
+def test_check_actions_rejects_missing_or_invalid_slug(slug, capsys) -> None:
+    check = make_check()
+    check.get_all_repos = MagicMock(return_value=[{"full_name": slug}])
+    check.get_latest_tasks = MagicMock()
+    with pytest.raises(SystemExit) as exit_info:
+        check.check_actions()
+    assert exit_info.value.code == 3
+    assert "repository response is missing full_name" in capsys.readouterr().out
+    check.get_latest_tasks.assert_not_called()
