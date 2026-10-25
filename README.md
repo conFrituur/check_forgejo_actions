@@ -1,32 +1,44 @@
-# Check Forgejo Actions
+# Check_Forgejo_Actions
+[![Build](https://github.com/stefankonig/check_forgejo_actions/actions/workflows/build.yml/badge.svg)](https://github.com/conFrituur/check_forgejo_actions/actions/workflows/build.yml)
+[![Coverage](https://raw.githubusercontent.com/conFrituur/check_forgejo_actions/refs/heads/coverage-badge/coverage.svg)](https://github.com/conFrituur/check_forgejo_actions/actions/workflows/build.yml)
+[![uv](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2FconFrituur%2Fcheck_forgejo_actions%2Frefs%2Fheads%2Fmain%2Fpyproject.toml&style=flat&logo=python&logoColor=lightgrey
+)](https://www.python.org)
+[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 
-Icinga/Nagios plugin that checks the newest Forgejo Actions run for every workflow with recorded tasks in repositories visible to an API token. It requires Python 3.12 or newer and uses the Forgejo v1 API.
+Icinga/Nagios plugin that checks the last Forgejo action run for every workflow in repositories visible to the API token. It requires Python >=3.12 with the `requests` module and uses the Forgejo v1 API.
 
-## Installation and usage
+>**AI NOTICE:** This project was derived from my (handwritten) check_drone_build plugin and altered with help from AI. All code has been reviewed and tested by me
 
-Install the locked runtime and development dependencies with `uv`:
-
-```console
-uv sync --locked --all-extras --dev
-uv run check_forgejo_actions.py --help
-```
-
-Example:
+## Usage
 
 ```console
-uv run check_forgejo_actions.py \
-  --server https://forgejo.example.org \
-  --token "$FORGEJO_TOKEN" \
-  --owner my-organization \
-  --warning-seconds 3600 \
-  --critical-seconds 7200
+foo@bar:~$ uv run check_forgejo_actions.py --help    
+usage: check_forgejo_actions.py [-h] --server <FORGEJO_SERVER> --token <FORGEJO_TOKEN> [--owner OWNER]
+                                [--warning-seconds WARNING_SECONDS] [--critical-seconds CRITICAL_SECONDS]
+                                [--verbose]
+
+Check Forgejo actions for failed or stuck runs
+
+options:
+  -h, --help            show this help message and exit
+  --owner, -o OWNER     only check repositories owned by this user or organization
+  --warning-seconds, -w WARNING_SECONDS
+                        warn when an active run is older than this
+  --critical-seconds, -c CRITICAL_SECONDS
+                        fail when an active run is older than this
+  --verbose, -v
+
+required arguments:
+  --server, -s <FORGEJO_SERVER>
+                        Forgejo hostname or HTTP(S) base URL
+  --token, -t <FORGEJO_TOKEN>
+                        Forgejo API token
 ```
 
-`--server` accepts a hostname, a full HTTP(S) URL, or a Forgejo URL beneath a subpath. `--owner` optionally limits repository discovery to one user or organization. The warning and critical thresholds are independent and optional; they apply only to queued, waiting, pending, requested, or in-progress, running, or blocked tasks. When both are supplied, warning must be lower than critical.
+`--server` accepts a hostname or a full HTTP(S) URL. `--owner` optionally limits repository discovery to one user or organization. The warning and critical thresholds are independent and optional; they apply only to running tasks. When both are supplied, warning must be lower than critical.
 
-A failed completed run is always CRITICAL. Successful, cancelled, and skipped runs are healthy. Unknown statuses or API errors produce UNKNOWN. The check reads `/repos/{owner}/{repo}/actions/tasks`, selects the highest `run_number` per `workflow_id`, and evaluates all job tasks in that run. Workflows without tasks are ignored. The tasks endpoint does not expose workflow activation state, so disabled workflows with recorded tasks are included.
+A failed run is always CRITICAL. Successful, cancelled, and skipped runs are healthy. Unknown statuses or API errors produce UNKNOWN. The check reads `/repos/{owner}/{repo}/actions/tasks`, workflows without tasks are ignored. The tasks endpoint does not expose workflow activation state, so disabled workflows with recorded tasks are included.
 
-The token needs read access to all monitored repositories and their Actions data. Store it as a protected Icinga custom variable; never place it directly in the command definition.
 
 ## Icinga CheckCommand
 
@@ -51,13 +63,4 @@ object CheckCommand "forgejo-actions" {
 }
 ```
 
-Add `forgejo_token` to **Protected Custom Variables** in Icinga Web so it is not displayed in plaintext.
-
-## Development
-
-```console
-uv run ruff check
-uv run pytest --cov=check_forgejo_actions
-```
-
-Tests use sanitized Forgejo API responses from `tests/ApiResponses/` and never contact a live instance.
+Add `forgejo_token` to **Protected Custom Variables**in the monitoring module of icingaweb2 so it won't show up in plaintext.
