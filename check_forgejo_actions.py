@@ -67,34 +67,70 @@ class CheckForgejoActions:
         ):
             raise ValueError("warning-seconds must be lower than critical-seconds")
 
-    @property
-    def headers(self) -> dict[str, str]:
-        return {"Authorization": f"token {self.token}", "Accept": "application/json"}
-
-    def api_call(self, path: str, params: dict[str, int] | None = None) -> object:
-        url = f"{self.server}/api/v1/{path.lstrip('/')}"
-        self.log.debug("API request: GET %s params=%s", url, params or {})
+    def check_actions(self) -> None:
         try:
-            response = requests.get(
-                url,
-                headers=self.headers,
-                params=params,
-                timeout=self.REQUEST_TIMEOUT,
+            repos = self.get_all_repos()
+        except ForgejoAPIError as error:
+            self.nagios_exit("UNKNOWN", str(error))
+
+        self.log.debug("Discovered %d accessible repositories", len(repos))
+        results: list[tuple[str, str]] = []
+        checked_repos: set[str] = set()
+        for repo in repos:
+            try:
+                owner_data = repo.get("owner")
+                owner = owner_data.get("login") if isinstance(owner_data, dict) else None
+                name = repo.get("name")
+                if not isinstance(owner, str) or not isinstance(name, str):
+                    raise ForgejoAPIError("repository response is missing owner.login or name")
+                if self.owner and owner != self.owner:
+                    self.log.debug("Skipping %s/%s: owner does not match filter %s", owner, name, self.owner)
+                    continue
+                slug = repo.get("full_name") or f"{owner}/{name}"
+                self.log.debug("Checking repository %s", slug)
+                latest = self.get_latest_tasks(owner, name)
+                for workflow_id, tasks in latest.items():
+                    checked_repos.add(str(slug))
+                    task_results = [
+                        self.evaluate_run(
+                            str(slug),
+                            {"name": f"{workflow_id}: {task.get('name') or 'unknown job'}"},
+                            task,
+                        )
+                        for task in tasks
+                    ]
+                    status = max(task_results, key=lambda result: self.SEVERITY[result[0]])[0]
+                    results.append((status, "; ".join(
+                        message for level, message in task_results if level == status
+                    )))
+            except ForgejoAPIError as error:
+                slug = repo.get("full_name", repo.get("name", "unknown repository"))
+                self.log.debug("Repository %s could not be checked: %s", slug, error)
+                results.append(("UNKNOWN", f"{slug}: {error}"))
+
+        if not results:
+            self.nagios_exit("UNKNOWN", "Could not find any actions to check")
+
+        status = max(results, key=lambda result: self.SEVERITY[result[0]])[0]
+        affected = [message for level, message in results if level == status]
+        counts = {
+            level: sum(result_level == level for result_level, _ in results)
+            for level in self.SEVERITY
+        }
+        self.log.debug(
+            "Aggregated results: workflows=%d repositories=%d counts=%s",
+            len(results),
+            len(checked_repos),
+            counts,
+        )
+        if status == "OK":
+            workflow_count = len(results)
+            self.nagios_exit(
+                "OK",
+                f"{workflow_count} latest action run(s) healthy across "
+                f"{len(checked_repos)} repositories",
             )
-        except requests.RequestException as error:
-            self.log.debug("API request failed: path=%s error=%s", path, error)
-            raise ForgejoAPIError(f"Forgejo API request failed for {path}: {error}") from error
-
-        if response.status_code != 200:
-            raise ForgejoAPIError(f"Forgejo API {path} returned HTTP {response.status_code}")
-        try:
-            data = response.json()
-        except ValueError as error:
-            raise ForgejoAPIError(
-                f"Forgejo API {path} did not return valid JSON"
-            ) from error
-        self.log.debug("Forgejo API %s response: %r", path, data)
-        return data
+        self.nagios_exit(status, "; ".join(affected))
 
     def get_all_repos(self) -> list[dict]:
         repos: list[dict] = []
@@ -152,6 +188,35 @@ class CheckForgejoActions:
             ) or (not isinstance(total, int) and len(tasks) < self.PAGE_SIZE):
                 return latest
             page += 1
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {"Authorization": f"token {self.token}", "Accept": "application/json"}
+
+    def api_call(self, path: str, params: dict[str, int] | None = None) -> object:
+        url = f"{self.server}/api/v1/{path.lstrip('/')}"
+        self.log.debug("API request: GET %s params=%s", url, params or {})
+        try:
+            response = requests.get(
+                url,
+                headers=self.headers,
+                params=params,
+                timeout=self.REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as error:
+            self.log.debug("API request failed: path=%s error=%s", path, error)
+            raise ForgejoAPIError(f"Forgejo API request failed for {path}: {error}") from error
+
+        if response.status_code != 200:
+            raise ForgejoAPIError(f"Forgejo API {path} returned HTTP {response.status_code}")
+        try:
+            data = response.json()
+        except ValueError as error:
+            raise ForgejoAPIError(
+                f"Forgejo API {path} did not return valid JSON"
+            ) from error
+        self.log.debug("Forgejo API %s response: %r", path, data)
+        return data
 
     @staticmethod
     def get_current_time() -> datetime:
@@ -218,71 +283,6 @@ class CheckForgejoActions:
             return "OK", detail
 
         return "UNKNOWN", f"{label} has unknown status {status!r}"
-
-    def check_actions(self) -> None:
-        try:
-            repos = self.get_all_repos()
-        except ForgejoAPIError as error:
-            self.nagios_exit("UNKNOWN", str(error))
-
-        self.log.debug("Discovered %d accessible repositories", len(repos))
-        results: list[tuple[str, str]] = []
-        checked_repos: set[str] = set()
-        for repo in repos:
-            try:
-                owner_data = repo.get("owner")
-                owner = owner_data.get("login") if isinstance(owner_data, dict) else None
-                name = repo.get("name")
-                if not isinstance(owner, str) or not isinstance(name, str):
-                    raise ForgejoAPIError("repository response is missing owner.login or name")
-                if self.owner and owner != self.owner:
-                    self.log.debug("Skipping %s/%s: owner does not match filter %s", owner, name, self.owner)
-                    continue
-                slug = repo.get("full_name") or f"{owner}/{name}"
-                self.log.debug("Checking repository %s", slug)
-                latest = self.get_latest_tasks(owner, name)
-                for workflow_id, tasks in latest.items():
-                    checked_repos.add(str(slug))
-                    task_results = [
-                        self.evaluate_run(
-                            str(slug),
-                            {"name": f"{workflow_id}: {task.get('name') or 'unknown job'}"},
-                            task,
-                        )
-                        for task in tasks
-                    ]
-                    status = max(task_results, key=lambda result: self.SEVERITY[result[0]])[0]
-                    results.append((status, "; ".join(
-                        message for level, message in task_results if level == status
-                    )))
-            except ForgejoAPIError as error:
-                slug = repo.get("full_name", repo.get("name", "unknown repository"))
-                self.log.debug("Repository %s could not be checked: %s", slug, error)
-                results.append(("UNKNOWN", f"{slug}: {error}"))
-
-        if not results:
-            self.nagios_exit("UNKNOWN", "Could not find any actions to check")
-
-        status = max(results, key=lambda result: self.SEVERITY[result[0]])[0]
-        affected = [message for level, message in results if level == status]
-        counts = {
-            level: sum(result_level == level for result_level, _ in results)
-            for level in self.SEVERITY
-        }
-        self.log.debug(
-            "Aggregated results: workflows=%d repositories=%d counts=%s",
-            len(results),
-            len(checked_repos),
-            counts,
-        )
-        if status == "OK":
-            workflow_count = len(results)
-            self.nagios_exit(
-                "OK",
-                f"{workflow_count} latest action run(s) healthy across "
-                f"{len(checked_repos)} repositories",
-            )
-        self.nagios_exit(status, "; ".join(affected))
 
     @staticmethod
     def nagios_exit(status: str, message: str) -> NoReturn:
