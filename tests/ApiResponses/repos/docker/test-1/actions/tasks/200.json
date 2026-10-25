@@ -1,29 +1,20 @@
 {
-  "total_count": 3,
   "workflow_runs": [
     {
-      "id": 103,
-      "workflow_id": "build.yml",
-      "run_number": 12,
-      "name": "Build",
+      "id": 97,
+      "name": "build-push-image",
+      "head_branch": "main",
+      "head_sha": "2878cff4ee293jf83j3j38fuij38fj3fa1dab22a",
+      "run_number": 7,
+      "event": "push",
+      "display_title": "chore(deps): update test-1/docker-test-1 digest to d99174e",
       "status": "success",
-      "created_at": "2026-01-02T10:00:00Z"
-    },
-    {
-      "id": 102,
-      "workflow_id": "build.yml",
-      "run_number": 12,
-      "name": "Lint",
-      "status": "failure",
-      "created_at": "2026-01-02T10:00:00Z"
-    },
-    {
-      "id": 101,
-      "workflow_id": "build.yml",
-      "run_number": 11,
-      "name": "Build",
-      "status": "failure",
-      "created_at": "2026-01-01T10:00:00Z"
+      "workflow_id": "build_and_push.yml",
+      "url": "https://git.example.com/docker/test-1/actions/runs/7",
+      "created_at": "2026-10-25T14:50:32+01:00",
+      "updated_at": "2026-10-25T14:51:16+01:00",
+      "run_started_at": "2026-10-25T14:50:32+01:00"
     }
-  ]
+  ],
+  "total_count": 9
 }
