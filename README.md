@@ -1,5 +1,5 @@
 # Check_Forgejo_Actions
-[![Build](https://github.com/stefankonig/check_forgejo_actions/actions/workflows/build.yml/badge.svg)](https://github.com/conFrituur/check_forgejo_actions/actions/workflows/build.yml)
+[![Build](https://github.com/conFrituur/check_forgejo_actions/actions/workflows/build.yml/badge.svg)](https://github.com/conFrituur/check_forgejo_actions/actions/workflows/build.yml)
 [![Coverage](https://raw.githubusercontent.com/conFrituur/check_forgejo_actions/refs/heads/coverage-badge/coverage.svg)](https://github.com/conFrituur/check_forgejo_actions/actions/workflows/build.yml)
 [![uv](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2FconFrituur%2Fcheck_forgejo_actions%2Frefs%2Fheads%2Fmain%2Fpyproject.toml&style=flat&logo=python&logoColor=lightgrey
 )](https://www.python.org)
