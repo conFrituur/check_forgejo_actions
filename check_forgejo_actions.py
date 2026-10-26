@@ -89,6 +89,9 @@ class CheckForgejoActions:
                 slug = repo.get("full_name")
                 if not isinstance(slug, str) or not slug:
                     raise ForgejoAPIError("repository response is missing full_name")
+                if repo.get("has_actions") is False:
+                    self.log.debug("Skipping repository %s: actions are disabled", slug)
+                    continue
                 self.log.debug("Checking repository %s", slug)
                 latest = self.get_latest_task(slug)
                 checked_repos += 1
